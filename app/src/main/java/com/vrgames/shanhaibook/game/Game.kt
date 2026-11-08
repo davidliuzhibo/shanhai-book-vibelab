@@ -17,6 +17,8 @@ import com.vrgames.shanhaibook.render.Sound
  * State the stage, its panels and both windows share (one process). [book] holds the rules (touched
  * under [lock]); the Compose fields mirror what the panels show and change only on events.
  */
+private const val GUIDE_AFTER_MS = 4000L
+
 object Game {
     private const val PREFS = "shanhai_book"
     private const val TAG = "BookGame"
@@ -36,6 +38,15 @@ object Game {
     var note by mutableStateOf<String?>(null)
     var noteVersion by mutableIntStateOf(0); private set
     var showTitle by mutableStateOf(true)
+    /** The narration clip now playing, or null. */
+    var speaking by mutableStateOf<String?>(null); private set
+    private var narrator: android.media.MediaPlayer? = null
+    private var appContext: Context? = null
+    /** The scroll beside the book is put away for this page. */
+    var scrollDismissed by mutableStateOf(false)
+    /** Where the ghost hand should demonstrate next, or null while it should rest. */
+    var guideAt by mutableStateOf<String?>(null); private set
+    private var idleSince = 0L
     var menuOpen by mutableStateOf(false)
     /** The mechanism the hint points at (the stage sparkles over it), bumping [hintVersion]. */
     var hintAt by mutableStateOf<String?>(null)
@@ -62,6 +73,7 @@ object Game {
     }
 
     fun init(context: Context) {
+        appContext = context.applicationContext
         if (prefs != null) return
         prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).also { p ->
             synchronized(lock) { book.load(p.getString("book", null)) }
@@ -100,20 +112,66 @@ object Game {
             }
             book.state.done && !wasDone -> {
                 val c = book.page.creature
-                say(if (c != null) "${c.name}回到画里了！翻开「异兽图录」可以看看它的来历。" else "这一页完成了！")
+                say(if (c != null) "${c.name}回到画里了！听听它的来历。" else "这一页完成了！")
                 sound?.play(if (c != null) Sfx.CREATURE else Sfx.DONE)
                 doneVersion++
+                scrollDismissed = false
+                c?.let { speak(it.id) }
             }
             said != null -> say(said)
             else -> say(null)
         }
         hintAt = null
+        interacted()
         save()
         return true
     }
 
+    /** The player just did something: the ghost hand rests, and shows the next thing after a pause. */
+    fun interacted() {
+        idleSince = android.os.SystemClock.uptimeMillis()
+        guideAt = null
+    }
+
+    /** Called about once a second: after a few quiet seconds, the ghost hand shows the next mechanism. */
+    fun tickGuide() {
+        // It teaches how paper moves, on the prologue only: the later pages are for the player to work out.
+        if (showTitle || book.state.done || book.page.id != "study") { if (guideAt != null) guideAt = null; return }
+        if (android.os.SystemClock.uptimeMillis() - idleSince < GUIDE_AFTER_MS) return
+        if (guideAt == null) guideAt = com.vrgames.shanhaibook.core.Guide.next(book.page, book.state)?.id
+    }
+
+    fun speak(id: String) {
+        stopNarration()
+        val c = appContext ?: return
+        runCatching {
+            val fd = c.assets.openFd("narration/$id.ogg")
+            narrator = android.media.MediaPlayer().apply {
+                setDataSource(fd.fileDescriptor, fd.startOffset, fd.length)
+                fd.close()
+                setOnCompletionListener { stopNarration() }
+                prepare()
+                start()
+            }
+            speaking = id
+            music?.ducked = true
+        }.onFailure { Log.i(TAG, "narration $id: ${it.message}") }
+    }
+
+    fun stopNarration() {
+        runCatching { narrator?.stop() }
+        runCatching { narrator?.release() }
+        narrator = null
+        speaking = null
+        music?.ducked = false
+    }
+
     fun turn() {
         if (synchronized(lock) { book.turn() }) {
+            stopNarration()
+            scrollDismissed = false
+            interacted()
+            if (book.last) speak("ending")
             say(null)
             hintAt = null
             version++
@@ -127,6 +185,7 @@ object Game {
     /** Jumps to page [i] if it has been reached (the 书签 window). */
     fun goTo(i: Int) {
         if (!book.reachable(i)) return
+        stopNarration()
         synchronized(lock) { book.goTo(i) }
         say(null)
         version++

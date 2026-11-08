@@ -101,3 +101,22 @@ class BookTest {
         assertFalse(c.reachable(2))
     }
 }
+
+class GuidanceTest {
+    @org.junit.Test fun everyCreatureHasNarrationOfTheRightLength() {
+        for (page in Pages.all) {
+            val c = page.creature ?: continue
+            val text = Pages.VOICE[c.id]
+            org.junit.Assert.assertNotNull(c.id, text)
+            org.junit.Assert.assertTrue("${c.id} ${text!!.length}", text.length in 60..110)
+        }
+    }
+
+    @org.junit.Test fun theGhostHandPointsAtAMechanismOnEveryUnfinishedPageAndRestsOnAFinishedOne() {
+        for (page in Pages.all) {
+            val state = PageState(page)
+            if (page.check(state) != null) org.junit.Assert.assertNotNull(page.id, Guide.next(page, state))
+            else org.junit.Assert.assertNull(page.id, Guide.next(page, state))
+        }
+    }
+}

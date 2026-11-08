@@ -136,6 +136,14 @@ fun BookStage() {
         if (!v.turning && drag.mech == null) synchronized(Game.lock) { v.apply(Game.book.state) }
     }
     LaunchedEffect(Game.doneVersion, view) { if (Game.doneVersion > 0) view?.celebrate() }
+    LaunchedEffect(Game.guideAt, view) { view?.guide(Game.guideAt) }
+    LaunchedEffect(Unit) {
+        Game.interacted()
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            Game.tickGuide()
+        }
+    }
     LaunchedEffect(Game.hintVersion, view) {
         val id = Game.hintAt ?: return@LaunchedEffect
         val v = view ?: return@LaunchedEffect
@@ -182,6 +190,7 @@ fun BookStage() {
         show(PANEL_TITLE, Game.showTitle)
         show(PANEL_PAGE, !Game.showTitle)
         show(PANEL_NEXT, !Game.showTitle)
+        show(PANEL_SCROLL, !Game.showTitle && Game.book.page.creature != null && Game.book.state.done && !Game.scrollDismissed)
         show(PANEL_MENU, !Game.showTitle)
         panels[PANEL_MENU]?.setPos(if (Game.menuOpen) MENU_OPEN_POS else MENU_POS)
     }
@@ -257,6 +266,7 @@ fun BookStage() {
             AttachmentPanel(PANEL_TITLE) { TitlePanel(converter) }
             AttachmentPanel(PANEL_PAGE) { PagePanel(converter) }
             AttachmentPanel(PANEL_NEXT) { NextPanel(converter) }
+            AttachmentPanel(PANEL_SCROLL) { ScrollPanel(converter) }
             AttachmentPanel(PANEL_MENU) {
                 MenuPanel(converter, toggleWindow, faceMe = { Game.faceRequest++ }, quit = { context.findActivity()?.finishAndRemoveTask() }, version = appVersion)
             }
@@ -264,12 +274,13 @@ fun BookStage() {
         update = { _, attachments -> view?.let { attach(it, attachments, panels) } },
         initial = { content, attachments ->
             content.addEntity(Entity().apply {
-                components.set(DirectionalLightComponent(Color(0xFFFFE8C8).toColor4(), 900f, true))
+                components.set(DirectionalLightComponent(Color(0xFFFFE8C8).toColor4(), 900f, false))
                 components[TransformComponent::class.java]?.setEulerAngles(EulerAngles(-55f, 30f, 0f))
             })
             // The card illustrations (tools/cutout.py), with their proportions for the card sizes.
             val (cards, aspects) = withContext(Dispatchers.IO) { loadCards(context) }
             Log.i(TAG, "cards ${cards.size}")
+            for (name in PANEL_FRAMES.values) runCatching { Entity.loadSuspend("asset://panels/$name.glb") }.onSuccess { frames[name] = it }
             val v = BookView(Game.book, cards, aspects)
             place.view = v
             place.put()
@@ -412,6 +423,10 @@ private class Place {
 private val MENU_POS = Vector3(-0.3f, 0.03f, 0.24f)
 private val MENU_OPEN_POS = Vector3(-0.42f, 0.2f, 0.12f)
 
+/** The thick scroll frames behind the panels, loaded by the stage (tools/panel3d). */
+private val PANEL_FRAMES = mapOf(PANEL_TITLE to "panel_title", PANEL_PAGE to "panel_page", PANEL_SCROLL to "panel_scroll")
+private val frames = HashMap<String, Entity>()
+
 private fun attach(v: BookView, a: SpatialViewAttachments, panels: HashMap<String, Entity>) {
     fun put(id: String, pos: Vector3, pitch: Float, yaw: Float = 0f) {
         val e = a.entity(id) ?: return
@@ -419,6 +434,7 @@ private fun attach(v: BookView, a: SpatialViewAttachments, panels: HashMap<Strin
         panels[id] = e
         v.root.addChild(e)
         e.setPos(pos)
+        PANEL_FRAMES[id]?.let { name -> frames[name]?.let { f -> f.setPos(Vector3(0f, 0f, -0.006f)); e.addChild(f) } }
         e.transform().eulerAngles = EulerAngles(pitch, yaw, 0f)
     }
     // The title over the closed book; the page panel behind the book, raised and leaning back a little.
@@ -426,6 +442,8 @@ private fun attach(v: BookView, a: SpatialViewAttachments, panels: HashMap<Strin
     put(PANEL_PAGE, Vector3(0f, 0.33f, -0.27f), -12f)
     // The way on over the near edge of the right page, tipped up to face the player.
     put(PANEL_NEXT, Vector3(0.14f, 0.09f, 0.24f), -35f)
+    // The scroll stands to the right of the book, turned towards the player.
+    put(PANEL_SCROLL, Vector3(0.46f, 0.24f, -0.02f), -8f, -32f)
     put(PANEL_MENU, MENU_POS, -35f, 15f)
 }
 

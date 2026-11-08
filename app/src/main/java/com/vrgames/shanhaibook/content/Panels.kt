@@ -1,5 +1,9 @@
 package com.vrgames.shanhaibook.content
 
+import kotlin.math.roundToInt
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -12,6 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -33,10 +41,17 @@ const val PANEL_TITLE = "title"
 const val PANEL_PAGE = "page"
 const val PANEL_NEXT = "next"
 const val PANEL_MENU = "menu"
+const val PANEL_SCROLL = "scroll"
+
+// Ink for text on the scrolls' paper.
+private val Ink = Color(0xFF241A10)
+private val InkSoft = Color(0xFF5E4C39)
+private val SealRed = Color(0xFFB3271C)
 
 val LabelInk = Color(0xFFF4EEE2)
 val Brass = Color(0xFFE2B75A)
-val Dim = Color(0xFFC2B8A6)
+// Secondary text, light enough to read against the dark panel recess.
+val Dim = Color(0xFFE2DACB)
 val Jade = Color(0xFF8FD3A8)
 val Cinnabar = Color(0xFFE0604A)
 private val PanelBg = Color(0xE6151A22)
@@ -86,13 +101,65 @@ fun Pill(c: PhysicalLengthConverter, text: String, color: Color = Dim, onClick: 
     )
 }
 
+/** Text on the paper of a thick scroll frame (the model is added by the stage); no flat box of its own. */
+@Composable
+private fun Paper(c: PhysicalLengthConverter, width: Float, height: Float, content: @Composable () -> Unit) {
+    // Fixed by its frame; content taller than the panel is scaled down to fit, so a button never slips under the edge.
+    Layout(
+        content = { Column(verticalArrangement = Arrangement.spacedBy(c.m(0.006f))) { content() } },
+        modifier = Modifier.width(c.m(width)).height(c.m(height)).padding(horizontal = c.m(0.018f), vertical = c.m(0.006f)),
+    ) { measurables, constraints ->
+        val p = measurables[0].measure(constraints.copy(minWidth = 0, minHeight = 0, maxHeight = Constraints.Infinity))
+        val s = if (p.height > constraints.maxHeight) constraints.maxHeight.toFloat() / p.height else 1f
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            val x = ((constraints.maxWidth - p.width * s) / 2f).roundToInt().coerceAtLeast(0)
+            val y = ((constraints.maxHeight - p.height * s) / 2f).roundToInt().coerceAtLeast(0)
+            p.placeWithLayer(x, y) {
+                scaleX = s
+                scaleY = s
+                transformOrigin = TransformOrigin(0f, 0f)
+            }
+        }
+    }
+}
+
+/** A carved red seal to pinch: it reads the creature's story aloud. */
+@Composable
+private fun SealButton(c: PhysicalLengthConverter, playing: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(c.m(0.01f))
+    Box(
+        Modifier.size(c.m(0.062f)).clip(shape)
+            .background(Brush.linearGradient(listOf(Color(0xFFD23A2A), Color(0xFF8E1D14))))
+            .border(c.m(0.002f), Color(0xFF5E1009), shape).clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) { Text(if (playing) "停" else "听", fontSize = c.sz(0.032f), color = Color(0xFFFFE9D6)) }
+}
+
+/** Once a creature is back: its name, source and story on a scroll, with the seal that reads it. */
+@Composable
+fun ScrollPanel(c: PhysicalLengthConverter) {
+    @Suppress("UNUSED_VARIABLE") val v = Game.version
+    val cr = Game.book.page.creature ?: return
+    Paper(c, 0.46f, 0.32f) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(c.m(0.012f))) {
+            SealButton(c, Game.speaking == cr.id) { if (Game.speaking == cr.id) Game.stopNarration() else Game.speak(cr.id) }
+            Column {
+                Text(cr.name, fontSize = c.sz(0.032f), color = SealRed)
+                Text(cr.source, fontSize = c.sz(0.014f), color = InkSoft)
+            }
+        }
+        Text(com.vrgames.shanhaibook.core.Pages.VOICE[cr.id] ?: "", fontSize = c.sz(0.0165f), color = Ink)
+        Pill(c, "收起卷轴", InkSoft) { Game.scrollDismissed = true }
+    }
+}
+
 /** Before the book opens: what it is, how the paper works, and the brass button to begin. */
 @Composable
 fun TitlePanel(c: PhysicalLengthConverter) {
-    PanelBox(c, 0.5f) {
-        Text("纸上山海", fontSize = c.sz(0.036f), color = Brass)
+    Paper(c, 0.52f, 0.25f) {
+        Text("纸上山海", fontSize = c.sz(0.036f), color = SealRed)
         Text("小画师墨生的立体书《山海图》被一滴墨弄乱了，书里的异兽都走散了。拉纸条、转纸轮、掀纸片，帮它们一页页回到画里。", fontSize = c.sz(0.017f), color = LabelInk)
-        Text("怎么玩：看着书上的纸机关，用手指捏住它：红纸条往自己这边拉，纸轮往旁边拉着转，纸片捏一下就掀开。每一页还藏着一枚红印章。", fontSize = c.sz(0.015f), color = Dim)
+        Text("怎么玩：看着书上的纸机关，用手指捏住它：红纸条往自己这边拉，纸轮往旁边拉着转，纸片捏一下就掀开。每一页还藏着一枚红印章。", fontSize = c.sz(0.015f), color = LabelInk)
         CallToAction(c, "打开书 →") { Game.showTitle = false }
     }
 }
@@ -103,13 +170,13 @@ fun PagePanel(c: PhysicalLengthConverter) {
     @Suppress("UNUSED_VARIABLE") val v = Game.version
     val b = Game.book
     val missing = b.page.check(b.state)
-    PanelBox(c, 0.46f) {
-        Text(b.page.title, fontSize = c.sz(0.024f), color = Brass)
-        Text(b.page.task, fontSize = c.sz(0.015f), color = LabelInk)
-        Game.note?.let { Text(it, fontSize = c.sz(0.016f), color = if (it.startsWith("提示")) Jade else Brass) }
+    Paper(c, 0.48f, 0.2f) {
+        Text(b.page.title, fontSize = c.sz(0.024f), color = SealRed)
+        Text(b.page.task, fontSize = c.sz(0.015f), color = Ink)
+        Game.note?.let { Text(it, fontSize = c.sz(0.016f), color = Ink) }
         Row(horizontalArrangement = Arrangement.spacedBy(c.m(0.008f)), verticalAlignment = Alignment.CenterVertically) {
-            if (missing != null) Pill(c, "给点提示", Jade) { Game.hint() }
-            Text("红印章 ${b.seals.size}/7　异兽 ${b.creaturesBack.size}/6", fontSize = c.sz(0.014f), color = Dim)
+            if (missing != null) Pill(c, "给点提示", SealRed) { Game.hint() }
+            Text("红印章 ${b.seals.size}/7　异兽 ${b.creaturesBack.size}/6", fontSize = c.sz(0.014f), color = InkSoft)
         }
     }
 }

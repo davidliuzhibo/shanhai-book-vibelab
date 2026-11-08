@@ -43,8 +43,24 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
     private val glitter = Sparks("glitter", 160, sphere, glow(color(1f, 0.85f, 0.45f, 1f)).shared()).also { root.addChild(it.entity) }
     private val materials = HashMap<String, Material>()
     var clock = 0.0; private set
+    private val cone = MeshResource.createCone(1f, 1f).shared()
+    private val guideGold = unlit(color(1f, 0.78f, 0.25f)).shared()
+    private val printRed = pbr(color(0.72f, 0.16f, 0.1f), roughness = 0.85f).shared()
+    /** The ghost hand: a soft gold thumb and forefinger that close on a mechanism and show its motion. */
+    private val ghost = Entity().also { root.addChild(it); it.enabled = false }
+    private val ghostIndex = Entity().also { ghost.addChild(it) }
+    private val ghostThumb = Entity().also { ghost.addChild(it) }
+    private val ghostArrow = model(cone, guideGold).also { ghost.addChild(it) }
+    private var ghostAt: Mechanism? = null
+    private var ghostFrom = Vec3.ZERO
+    private var ghostClock = 0.0
+    private var ending = 0.0
 
     init {
+        for ((e, sign) in listOf(ghostIndex to 1f, ghostThumb to -1f)) {
+            e.addChild(model(sphere, guideGold).apply { transform().setScaleVector(Vector3(0.008f, 0.03f, 0.008f)); setPos(Vector3(sign * 0.018f, 0.03f, 0f)); transform().eulerAngles = EulerAngles(0f, 0f, sign * -22f) })
+            e.addChild(model(sphere, guideGold).apply { setScale(0.0095f); setPos(Vector3(sign * 0.008f, 0.006f, 0f)) })
+        }
         val board = pbr(color(0.32f, 0.12f, 0.1f), roughness = 0.7f)
         for (sx in listOf(-1f, 1f)) {
             root.addChild(model(MeshResource.createBox(Vector3(PAGE_W + 0.012f, 0.012f, PAGE_D + 0.02f), 0.003f), board).apply {
@@ -86,9 +102,49 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
         }
     }
 
+    /** Shows the ghost hand on [id], or hides it (null). */
+    fun guide(id: String?) {
+        val m = id?.let { book.page.mech(it) }
+        ghostAt = m
+        ghost.enabled = m != null
+        if (m != null) {
+            ghostFrom = spotOf(m.id) ?: Vec3.ZERO
+            ghostClock = 0.0
+        }
+    }
+
+    private fun animateGhost(dt: Double) {
+        val m = ghostAt ?: return
+        ghostClock = (ghostClock + dt) % GHOST_LOOP
+        val t = ghostClock / GHOST_LOOP
+        // Reach (0-.25), pinch (.25-.4), move (.4-.8), let go and fade back (.8-1).
+        val pinch = when { t < .25 -> 0.0; t < .4 -> (t - .25) / .15; t < .8 -> 1.0; else -> 1 - (t - .8) / .2 }
+        val move = when { t < .4 -> 0.0; t < .8 -> ease((t - .4) / .4); else -> 1.0 }
+        val reach = if (t < .25) 1 - ease(t / .25) else 0.0
+        val path: Vec3 = when (m) {
+            is Mechanism.Tab -> Vec3(0.0, 0.0, 0.07 * move)
+            is Mechanism.Wheel -> Vec3(0.055 * move, 0.0, 0.0)
+            else -> Vec3(0.0, 0.07 * move, 0.0)
+        }
+        val base = ghostFrom + path + Vec3(0.0, 0.015 + reach * 0.09, reach * 0.07)
+        ghost.setPos(Vector3(base.x.toFloat(), base.y.toFloat(), base.z.toFloat()))
+        ghostIndex.setPos(Vector3((0.012 * (1 - pinch)).toFloat(), 0f, 0f))
+        ghostThumb.setPos(Vector3((-0.012 * (1 - pinch)).toFloat(), 0f, 0f))
+        ghostArrow.enabled = t in .4..0.95
+        val (arrowAt, pointing) = when (m) {
+            is Mechanism.Tab -> Vector3(0f, 0.04f, 0.04f) to EulerAngles(90f, 0f, 0f)
+            is Mechanism.Wheel -> Vector3(0.04f, 0.04f, 0f) to EulerAngles(0f, 0f, -90f)
+            else -> Vector3(0f, 0.095f, 0f) to EulerAngles(0f, 0f, 0f)
+        }
+        ghostArrow.setPos(arrowAt)
+        ghostArrow.transform().eulerAngles = pointing
+        ghostArrow.setScale(0.016f)
+    }
+
     /** Per frame; true when a turn has just finished. */
     fun frame(dt: Double): Boolean {
         clock += dt
+        animateGhost(dt)
         glitter.update(dt, drag = 0.8)
         spreads[book.index]?.frame(dt)
         if (opening < 1) {
@@ -187,7 +243,7 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
         val anims = ArrayList<(Double) -> Unit>()
         private var hop = -1.0
         private var creature: Entity? = null
-        private var creatureY = 0f
+        private var creatureHome = Vector3(0f, 0f, 0f)
         private val page = book.pages[index]
 
         init {
@@ -253,12 +309,15 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
             }
             if (hop >= 0) {
                 hop += dt
-                creature?.let { c ->
-                    val y = if (hop < 0.6) (sin(hop / 0.6 * PI) * 0.03).toFloat() else 0f
-                    val p = c.transform().position
-                    c.setPos(Vector3(p.x, creatureY + y, p.z))
+                creature?.let { c -> perform(c, hop) }
+                if (hop > PERFORM_S) {
+                    creature?.let { c ->
+                        c.setPos(creatureHome)
+                        if (cards.none { it.first === c }) c.transform().eulerAngles = EulerAngles(0f, 0f, 0f)
+                        else c.getChildren().firstOrNull()?.transform()?.eulerAngles = EulerAngles(0f, 0f, 0f)
+                    }
+                    hop = -1.0
                 }
-                if (hop > 0.6) hop = -1.0
             }
             for (a in anims) a(dt)
         }
@@ -267,9 +326,54 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
             shaking = m.id to 0.0
         }
 
+        /** The reward: the creature comes alive above its page, each in its own way, then settles back. */
+        private fun perform(c: Entity, t: Double) {
+            val k = (t / PERFORM_S).coerceIn(0.0, 1.0)
+            val rise = sin(k * PI)
+            val a = k * 2 * PI
+            val h = creatureHome
+            fun at(x: Double, y: Double, z: Double) = c.setPos(Vector3(h.x + x.toFloat(), h.y + y.toFloat(), h.z + z.toFloat()))
+            // A pop-up card's hinge angle is set every frame by [set]; turning the hinge would be undone at once, so a
+            // card creature turns its picture instead. A loose cut-out (a bird) turns as a whole.
+            val turned = if (cards.any { it.first === c }) c.getChildren().firstOrNull() ?: c else c
+            fun turn(e: EulerAngles) { turned.transform().eulerAngles = e }
+            when (page.id) {
+                // 精卫 and 金乌 fly a wide circle over the book, wings beating.
+                "sea", "sun" -> {
+                    at(sin(a) * 0.17 * rise, rise * 0.19 + sin(t * 7) * 0.012, (cos(a) - 1) * 0.1 * rise)
+                    turn(EulerAngles(0f, Math.toDegrees(a).toFloat() + 90f, (sin(t * 16) * 12).toFloat()))
+                }
+                // 九尾狐 bounds along the page and back.
+                "fox" -> {
+                    at(sin(a) * 0.16, abs(sin(t * 7.5)) * 0.05 * rise, 0.0)
+                    turn(EulerAngles(0f, if (cos(a) > 0) 0f else 180f, 0f))
+                }
+                // 开明兽 rises and turns to look all round, keeping watch.
+                "gate" -> {
+                    at(0.0, rise * 0.12 + abs(sin(t * 5)) * 0.02 * rise, 0.0)
+                    turn(EulerAngles(0f, (sin(t * 2.2) * 60).toFloat(), 0f))
+                }
+                // 烛龙 lifts and sways like a serpent.
+                "dragon" -> {
+                    at(sin(t * 3) * 0.04 * rise, rise * 0.14, 0.0)
+                    turn(EulerAngles(0f, 0f, (sin(t * 3) * 16 * rise).toFloat()))
+                }
+                // 帝江 dances: quick hops and spins.
+                "song" -> {
+                    at(0.0, abs(sin(t * 9)) * 0.05 * rise, 0.0)
+                    turn(EulerAngles(0f, (t * 240 % 360).toFloat(), 0f))
+                }
+                else -> at(0.0, abs(sin(t * 6)) * 0.03 * rise, 0.0)
+            }
+            if ((t * 3).toInt() != ((t - 1.0 / 72) * 3).toInt()) {
+                val p = c.convertPositionTo(Vector3(0f, 0.05f, 0f), this@BookView.root)
+                glitter.emit(Vec3(p.x.toDouble(), p.y.toDouble(), p.z.toDouble()), 8, 0.14, 0.9, 0.0035f)
+            }
+        }
+
         fun celebrate() {
             val c = creature ?: return
-            if (hop < 0) creatureY = c.transform().position.y
+            if (hop < 0) creatureHome = c.transform().position
             hop = 0.0
             val p = c.convertPositionTo(Vector3(0f, 0.06f, 0f), this@BookView.root)
             glitter.emit(Vec3(p.x.toDouble(), p.y.toDouble(), p.z.toDouble()), 50, 0.25, 1.4, 0.005f)
@@ -317,6 +421,7 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
             // A paper pull-ring at its end, so it reads as something to pull.
             e.addChild(model(MeshResource.createTorus(0.012f, 0.008f), pbr(color(0.9f, 0.75f, 0.35f))).apply { setPos(Vector3(0f, 0f, 0.035f)) })
             root.addChild(e)
+            printedArrow(x, PAGE_D / 2 - 0.05f, 90f)
             pinchable(e, page.mech(id), Vector3(0.045f, 0.03f, 0.09f), Vector3(0f, 0f, 0.015f))
             shows[id] = { v ->
                 e.setPos(Vector3(baseX[id] ?: x, PAPER_Y + 0.003f, (PAGE_D / 2 - 0.01f + TAB_TRAVEL * v).toFloat()))
@@ -343,6 +448,8 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
                 transform().eulerAngles = EulerAngles(-90f, 0f, 0f)
             })
             pinchable(e, m, Vector3(WHEEL_R * 2, 0.03f, WHEEL_R * 2))
+            printedArrow(x + WHEEL_R + 0.016f, z, 0f)
+            printedArrow(x - WHEEL_R - 0.016f, z, 180f)
             shows[id] = { v ->
                 e.transform().eulerAngles = EulerAngles(0f, (-360.0 * v / m.steps).toFloat(), 0f)
                 onShow(v)
@@ -382,6 +489,14 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
             }
         }
 
+        /** An arrow printed on the paper, showing which way a mechanism moves. [dir]: 0 points +x, 90 points +z. */
+        private fun printedArrow(x: Float, z: Float, dir: Float) {
+            val a = Entity().apply { setPos(Vector3(x, PAPER_Y + 0.0015f, z)); transform().eulerAngles = EulerAngles(0f, -dir, 0f) }
+            a.addChild(model(cone, printRed).apply { transform().setScaleVector(Vector3(0.008f, 0.012f, 0.0015f)); setPos(Vector3(0.008f, 0f, 0f)); transform().eulerAngles = EulerAngles(0f, 0f, -90f) })
+            a.addChild(model(MeshResource.createBox(Vector3(0.012f, 0.001f, 0.003f), 0f), printRed).apply { setPos(Vector3(-0.004f, 0f, 0f)) })
+            root.addChild(a)
+        }
+
         /** A small red seal lying under a flap. */
         fun seal(x: Float, z: Float) {
             stand(x, z, PAPER_Y + 0.001f, standUp = 0.0).addChild(
@@ -392,7 +507,7 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
 
         private fun creatureIs(e: Entity) {
             creature = e
-            creatureY = e.transform().position.y
+            creatureHome = e.transform().position
         }
 
         // ---- The pages ----
@@ -427,7 +542,7 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
             tab("bird", 0.21f) { v ->
                 val p = Vector3((-0.18 + 0.32 * v).toFloat(), (PAPER_Y + 0.08 - 0.02 * v).toFloat(), (0.02 - 0.09 * v).toFloat())
                 bird.setPos(p)
-                creatureY = p.y
+                creatureHome = p
                 stone.setPos(if (v > 0.95) Vector3(0.14f, PAPER_Y + 0.062f, -0.07f) else Vector3(-0.12f, PAPER_Y + 0.006f, 0.03f))
             }
             seal(0.05f, 0.0f)
@@ -488,12 +603,15 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
             val doorL = card("gate_door", -0.03f, -0.12f, 0.06f, 0.12f, color(0.75f, 0.15f, 0.12f))
             val doorR = card("gate_door", 0.03f, -0.12f, 0.06f, 0.12f, color(0.75f, 0.15f, 0.12f))
             creatureIs(card("gate_beast", -0.15f, -0.04f, 0.12f, 0.1f, color(0.9f, 0.7f, 0.3f)))
-            card("gate_chart", 0.18f, -0.08f, 0.1f, 0.1f, color(0.85f, 0.8f, 0.65f))
-            // The chart's arrows on the page before it, one per head group (north points away from the player).
+            // The star chart stands right of the gate, big enough to find, with its three red arrows on its face (up is
+            // north): left to right they belong to the three paper wheels, left to right. Only the arrows tell the answer.
+            val chart = card("gate_chart", 0.19f, -0.1f, 0.15f, 0.15f, color(0.85f, 0.8f, 0.65f))
+            val red = pbr(color(0.82f, 0.16f, 0.12f), 0f, 0.5f)
             for ((k, dir) in Pages.HEADS.values.withIndex()) {
-                root.addChild(model(MeshResource.createCone(0.02f, 0.006f), pbr(color(0.8f, 0.2f, 0.15f))).apply {
-                    setPos(Vector3(0.155f + k * 0.025f, PAPER_Y + 0.004f, -0.01f))
-                    transform().eulerAngles = EulerAngles(-90f, -90f * dir, 0f)
+                chart.addChild(model(MeshResource.createCone(0.034f, 0.011f), red).apply {
+                    setPos(Vector3(-0.042f + k * 0.042f, 0.075f, CARD_T / 2 + 0.006f))
+                    transform().eulerAngles = EulerAngles(0f, 0f, -90f * dir)
+                    transform().setScaleVector(Vector3(1f, 1f, 0.35f))
                 })
             }
             val heads = (1..3).map { k -> card("gate_heads", -0.2f + k * 0.06f, 0.06f, 0.05f, 0.035f, color(0.9f, 0.75f, 0.4f)) }
@@ -536,7 +654,7 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
                 val from = perch(chosen)
                 val p = Vector3(from.x + (0.1f - from.x) * v.toFloat(), from.y + 0.12f * v.toFloat(), from.z)
                 crows[chosen].setPos(p)
-                creatureY = p.y
+                creatureHome = p
                 sun.setPos(Vector3(p.x, p.y + 0.04f, p.z))
                 sun.setScale((0.018 * v).toFloat().coerceAtLeast(0.001f))
             }
@@ -595,7 +713,14 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
                 val home = Vector3(-0.18f + i * 0.072f, PAPER_Y, -0.02f)
                 cutout(n, 0.065f, 0.065f, color(0.9f, 0.6f, 0.3f)).apply { setPos(home) } to home
             }
-            anims += { _ ->
+            anims += { dt ->
+                // The ending's fireworks of gold, higher and fuller than a page's.
+                ending += dt
+                if (ending > 1.1) {
+                    ending = 0.0
+                    val a = clock * 1.7
+                    glitter.emit(Vec3(sin(a) * 0.32, 0.34 + sin(clock) * 0.06, cos(a) * 0.22), 34, 0.3, 1.5, 0.006f, Vec3(0.0, 0.05, 0.0))
+                }
                 val t = clock % 14.0
                 for ((i, pair) in figures.withIndex()) {
                     val (e, home) = pair
@@ -634,6 +759,8 @@ class BookView(private val book: Book, private val cards: Map<String, TextureRes
         const val TURN_S = 1.2
         const val OPEN_S = 1.6
         const val SHAKE_S = 0.4
+        const val GHOST_LOOP = 2.8
+        const val PERFORM_S = 6.0
         /** How much taller than its placeholder box a picture card may stand. */
         const val TALLER = 1.6f
 

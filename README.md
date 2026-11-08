@@ -1,21 +1,11 @@
-# 纸上山海 · ShanhaiBook
+# 纸上山海
 
-PICO Spatial SDK 游戏，版本 0.2 / versionCode 2。
+PICO Vibe Lab 投稿源码，版本 0.4.1，versionCode 5，Android 包名 com.vrgames.shanhaibook。变更内容见 [更新说明](更新说明.md)。
 
-八页立体书，拉纸条、转纸轮、掀纸片，完成六只异兽的机关故事，收集七枚红印章。图录、目录、提示、重来和音乐控制随书提供。
-
-混合现实立体书，识别到合适桌面后安放书本，未识别到时使用虚拟台面。
-
-游戏逻辑与素材均在本地，不需要业务服务器。以系统手势和眼手/手势射线交互，不依赖手柄。
-
-## 构建
-
-Gradle 工程根目录即本仓库根。需要 JDK 21 和 Android SDK 35。模型、纹理、音频、图标均随源码提供；构建不需要调用生成模型。
+本仓库根目录为 Gradle 工程。使用 JDK 21 和 Android SDK 35，设置 JAVA_HOME 和 ANDROID_HOME 后运行以下命令。Windows 使用 gradlew.bat。
 
 ```sh
-./gradlew testDebugUnitTest assembleRelease --no-daemon --max-workers=1
+./gradlew :app:testDebugUnitTest :app:assembleRelease
 ```
 
-Windows 使用 gradlew.bat。通过 ANDROID_HOME 指定 SDK；不包含本机配置、访问令牌或签名私钥。产物 app/build/outputs/apk/release/app-release-unsigned.apk 供平台签名。
-
-代码许可见 LICENSE，素材来源见 THIRD_PARTY_NOTICES.md。AI 编程工具和模型按作者确认：Claude Code + Claude Opus 5.5。
+运行时素材在 app/src/main/assets。外部开发签名为可选输入，无签名配置时可生成 app-release-unsigned.apk。
