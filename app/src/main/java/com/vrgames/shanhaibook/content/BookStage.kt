@@ -117,6 +117,9 @@ fun BookStage() {
         }
         val observer = androidx.lifecycle.LifecycleEventObserver { _, e ->
             if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) music.resume() else if (e == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) music.pause()
+            // Home pressed mid-narration: the voice stops with the game (device test 2026-11-12). ON_STOP, as a window of
+            // the game's own opening also pauses the stage.
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_STOP) Game.stopNarration()
         }
         lifecycle.addObserver(observer)
         onDispose {
